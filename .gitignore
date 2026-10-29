@@ -7,8 +7,10 @@ build/
 out/
 *.class
 
-# IntelliJ IDEA
-.idea/
+# IntelliJ IDEA (share run configs)
+.idea/*
+!.idea/runConfigurations/
+!.idea/runConfigurations/**
 *.iml
 
 # macOS

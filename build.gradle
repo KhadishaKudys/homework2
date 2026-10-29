@@ -6,6 +6,11 @@ repositories {
     mavenCentral()
 }
 
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
 dependencies {
     runtimeOnly 'org.postgresql:postgresql:42.7.14'
 }
