@@ -6,11 +6,12 @@ import java.sql.SQLException;
 public class ConnectionFactory {
 
     final static String POSTGRESQL = "jdbc:postgresql://localhost:5432/postgres";
-
+    final static String USERNAME = System.getenv("username");
+    final static String PASSWORD = System.getenv("password");
 
     static Connection getDefaultParameterConnection(final String databseURL) {
         try {
-            return DriverManager.getConnection(databseURL, "postgres", "password");
+            return DriverManager.getConnection(databseURL, USERNAME, PASSWORD);
         } catch (SQLException e) {
             e.printStackTrace();
             throw new RuntimeException(e);
