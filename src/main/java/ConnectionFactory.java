@@ -9,7 +9,7 @@ public class ConnectionFactory {
     final static String USERNAME = System.getenv("username");
     final static String PASSWORD = System.getenv("password");
 
-    static Connection getDefaultParameterConnection(final String databseURL) {
+    public static Connection getDefaultParameterConnection(final String databseURL) {
         try {
             return DriverManager.getConnection(databseURL, USERNAME, PASSWORD);
         } catch (SQLException e) {
