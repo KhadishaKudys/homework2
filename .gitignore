@@ -1,0 +1,15 @@
+
+# Gradle
+.gradle/
+build/
+
+# Compiled files
+out/
+*.class
+
+# IntelliJ IDEA
+.idea/
+*.iml
+
+# macOS
+.DS_Store
