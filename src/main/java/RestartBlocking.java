@@ -13,7 +13,6 @@ public class RestartBlocking {
     public static int num_taks=30;
     public static int num_queries_per_task = 3;
     private static final long BASE_BACKOFF_MS = 20;
-    private static final int MAX_RETRIES = 10;
 
     Connection con;
     Random rand = new Random(123456);
@@ -151,7 +150,7 @@ public class RestartBlocking {
                     try {
                         con.rollback();
                     } catch (SQLException ignored) {}
-                    if (isRetryable(e) && attempt < MAX_RETRIES) {
+                    if (isRetryable(e)) {
                         try {
                             Thread.sleep(BASE_BACKOFF_MS * attempt);
                         } catch (InterruptedException ie) {
