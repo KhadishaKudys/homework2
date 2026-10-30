@@ -1,5 +1,6 @@
 plugins {
     id 'java'
+    id 'application'
 }
 
 repositories {
@@ -13,4 +14,9 @@ java {
 }
 dependencies {
     runtimeOnly 'org.postgresql:postgresql:42.7.14'
+    implementation 'org.postgresql:postgresql:42.7.14'
+}
+
+application {
+    mainClass = 'RestartBlocking'
 }
