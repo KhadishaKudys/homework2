@@ -8,6 +8,7 @@ import java.util.Random;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 
@@ -32,17 +33,18 @@ import java.util.concurrent.atomic.AtomicInteger;
 # THE SOFTWARE.
 */
 
-public class Blocking {
+public class NoLiveLocks {
+	private final ReentrantLock lock = new ReentrantLock(true);
 	public static int num_taks=30;
 	public static int num_queries_per_task = 3;
-	
+
 	Connection con;
 	Random rand = new Random(123456);
 	int num_tuple = 50000;
 	double max_value = 50.0f;
 	AtomicInteger tasks_finished;
-	
-	public Blocking(){
+
+	public NoLiveLocks(){
 		tasks_finished = new AtomicInteger(0);
 	}
 	
@@ -58,7 +60,7 @@ public class Blocking {
 		}
 	}
 	
-	void cerateDB(){	
+	void cerateDB(){
 		try {
 			Connection con = ConnectionFactory.getDefaultParameterConnection(ConnectionFactory.POSTGRESQL);
 			executeSQL("DROP TABLE IF EXISTS blocking_data;",con);
@@ -87,11 +89,11 @@ public class Blocking {
 	
 	public static void main(String[] args){
 		//Create DB
-		Blocking b = new Blocking();
+		NoLiveLocks b = new NoLiveLocks();
 		b.cerateDB();
 		
 		//Create task and their queries
-		ArrayList<Blocking.Blocker> my_tasks = new ArrayList<Blocking.Blocker>(num_taks);
+		ArrayList<NoLiveLocks.Blocker> my_tasks = new ArrayList<NoLiveLocks.Blocker>(num_taks);
 		for(int task=0;task<num_taks;task++){
 			my_tasks.add(b.new Blocker(task));
 		}
@@ -136,34 +138,59 @@ public class Blocking {
 				start_range[q] = rand.nextDouble()*stop_range[q];
 			}
 		}
-		
+
 		@Override
 		public void run() {
-			Connection con=null;//XXX - Yes there needs to be a separate Connection per blocking taks. Otherwise strange things can happen
-			con = ConnectionFactory.getDefaultParameterConnection(ConnectionFactory.POSTGRESQL);//XXX This is the class you need to create, but does not have to be in the Repo
-			PreparedStatement ps;
-			
-			try {	
-				con.setAutoCommit(false);
-				con.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
-				int q = 0;
-				ps = con.prepareStatement("UPDATE blocking_data SET data_value = ?,  modified_by = "+task+" WHERE data_value >= ? AND data_value <= ?;",ResultSet.TYPE_SCROLL_SENSITIVE, ResultSet.CONCUR_UPDATABLE);
-				
-				while(q<num_queries_per_task) {//I want to execute num_queries_per_task update queries
-					ps.setDouble(1, (float) (rand.nextDouble()*max_value));//some value, which one is not important.
-					ps.setDouble(2, start_range[q]);
-					ps.setDouble(3, stop_range[q]);
-					//System.out.println("Started query "+q+" task "+task+" Executing "+ps);
-					ps.execute();
-					q++;
-				}		
-				con.commit();
-				int num_finished = tasks_finished.incrementAndGet();
-				con.close();
-				System.out.println("Done task "+task+". I am finisher number "+num_finished);
-			} catch (SQLException e) {
-				System.err.println("Task "+task+" "+e.getMessage());
+			lock.lock();
+
+			try {
+				try (Connection connection =
+							 ConnectionFactory.getDefaultParameterConnection(
+									 ConnectionFactory.POSTGRESQL)) {
+
+					connection.setAutoCommit(false);
+					connection.setTransactionIsolation(
+							Connection.TRANSACTION_READ_COMMITTED);
+
+					try {
+						String query =
+								"UPDATE blocking_data "
+										+ "SET data_value = ?, modified_by = ? "
+										+ "WHERE data_value >= ? AND data_value <= ?";
+
+						try (PreparedStatement statement =
+									 connection.prepareStatement(query)) {
+
+							for (int q = 0; q < num_queries_per_task; q++) {
+								statement.setDouble(
+										1, (float) (rand.nextDouble() * max_value));
+								statement.setInt(2, task);
+								statement.setDouble(3, start_range[q]);
+								statement.setDouble(4, stop_range[q]);
+								statement.executeUpdate();
+							}
+						}
+
+						connection.commit();
+
+						int doneCount = tasks_finished.incrementAndGet();
+
+						System.out.println(
+								"Done task " + task
+										+ ". I am finisher number " + doneCount);
+
+					} catch (SQLException error) {
+						connection.rollback();
+						throw error;
+					}
+
+				} catch (SQLException error) {
+					throw new RuntimeException(
+							"Task " + task + " failed", error);
+				}
+			} finally {
+				lock.unlock();
 			}
-		}	
+		}
 	}
 }

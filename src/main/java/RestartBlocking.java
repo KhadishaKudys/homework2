@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class RestartBlocking {
     public static int num_taks=30;
     public static int num_queries_per_task = 3;
-    private static final long BASE_BACKOFF_MS = 20;
+    private static final long BASE_BACKOFF_MS = 0;
 
     Connection con;
     Random rand = new Random(123456);
