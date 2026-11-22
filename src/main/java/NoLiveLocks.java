@@ -1,10 +1,7 @@
 import enums.OperationType;
 import org.apache.commons.lang3.tuple.Pair;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
+import java.sql.*;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -44,6 +41,12 @@ public class NoLiveLocks {
     private final ReentrantLock lock = new ReentrantLock(true);
     public static int num_taks = 30;
     public static int num_queries_per_task = 3;
+    public static final int NUMBER_OF_THREADS = 4;
+
+    private static final AtomicInteger SUM_INDIVIDUAL_TUPLES = new AtomicInteger();
+    private static final AtomicInteger INSERT = new AtomicInteger();
+    private static final AtomicInteger SUM_WHOLE_TABLE_SQL = new AtomicInteger();
+    private static final AtomicInteger UPDATE_3_ENTRIES = new AtomicInteger();
 
     Connection con;
     Random rand = new Random(123456);
@@ -105,12 +108,13 @@ public class NoLiveLocks {
 
         //Execute tasks
         ThreadPoolExecutor executor =
-                (ThreadPoolExecutor) Executors.newFixedThreadPool(4);//XXX - Do not change the number of threads used
+                (ThreadPoolExecutor) Executors.newFixedThreadPool(NUMBER_OF_THREADS);//XXX - Do not change the number of threads used
 
         final var start = System.currentTimeMillis();
 
-        // create 4 workers and each continues to create new transactions until isRunning is false (about 45 seconds).
-        for (int i = 0; i < 4; i++) {
+        // create 4 workers and each continues to create new transactions
+        // until isRunning is false (about 30 seconds).
+        for (int i = 0; i < NUMBER_OF_THREADS; i++) {
             executor.execute(() -> {
                 while (isRunning.get()) {
                     int task = currentTaskNumber.getAndIncrement();
@@ -119,8 +123,8 @@ public class NoLiveLocks {
             });
         }
 
-        // Run benchmark for 45 seconds
-        Thread.sleep(45_000);
+        // Run benchmark for 30 seconds
+        Thread.sleep(30_000);
 
         isRunning.set(false);
         executor.shutdown();
@@ -131,7 +135,12 @@ public class NoLiveLocks {
         }
 
         double stop = System.currentTimeMillis();
-        System.out.println("[DONE] Finished " + b.tasks_finished + " transactions in " + (stop - start) + " ms");
+        System.out.println("[DONE] Finished " + b.tasks_finished + " transactions in " + (stop - start) / 1000.0 + "s");
+        System.out.println("Operation distribution:");
+        System.out.println("Sum individual tuples: " + SUM_INDIVIDUAL_TUPLES.get());
+        System.out.println("Insert: " + INSERT.get());
+        System.out.println("Sum whole table (SQL): " + SUM_WHOLE_TABLE_SQL.get());
+        System.out.println("Update entries: " + UPDATE_3_ENTRIES.get());
     }
 
     /**
@@ -151,7 +160,7 @@ public class NoLiveLocks {
                 "SET data_value = ?, modified_by = ? " +
                 "WHERE data_id = (" +
                 "    SELECT data_id FROM blocking_data " +
-                "    WHERE data_value >= ? AND data_value <= ? " +
+                "    WHERE data_value >= ? AND data_value <= ? AND data_id != ALL(?)" +
                 "    LIMIT 1" +
                 ") RETURNING data_id";
 
@@ -177,10 +186,15 @@ public class NoLiveLocks {
             return new StringBuilder("Done task " + this.task + ". I am finisher " + doneCount + "\n" + operation + "\n");
         }
 
-        private void readMultipleTuples(final Connection connection) throws SQLException {
-            final var results = IntStream.range(0, 3)
-                    .mapToObj(_ -> ThreadLocalRandom.current().nextInt(0, num_tuple))
-                    .map(idToRead -> {
+        private void readMultipleTuples(final Connection connection) {
+            // generate infinite stream of ints via lambda
+            final var results = IntStream.generate(
+                            () -> ThreadLocalRandom.current().nextInt(0, num_tuple)
+                    )
+                    // no duplicates & limit to global var
+                    .distinct()
+                    .limit(num_queries_per_task)
+                    .mapToObj(idToRead -> {
                         try (PreparedStatement statement = connection.prepareStatement(READ_ONLY_QUERY)) {
                             statement.setInt(1, idToRead);
                             try (ResultSet rs = statement.executeQuery()) {
@@ -194,18 +208,20 @@ public class NoLiveLocks {
                         }
                     })
                     .toList();
+
             final var sum = results.stream()
                     .mapToDouble(Pair::getValue)
                     .sum();
 
-            final var output = SuccessfulCompletion("Sum 3 Tuples:");
+            final var output = SuccessfulCompletion("Sum " + num_queries_per_task + " Tuples:");
             results.forEach(result ->
-                    output.append(" id: ").append(result.getRight())
-                            .append(", value: ").append(result.getLeft()).append("\n")
+                    output.append(" id: ").append(result.getLeft())
+                            .append(", value: ").append(result.getRight()).append("\n")
             );
             output.append("Sum: ").append(sum).append("\n");
 
             System.out.println(output);
+            SUM_INDIVIDUAL_TUPLES.incrementAndGet();
         }
 
         private void insertEntry(Connection connection) throws SQLException {
@@ -221,6 +237,7 @@ public class NoLiveLocks {
                     final var id = rs.getInt("data_id");
 
                     System.out.println(SuccessfulCompletion("Inserted tuple: ID = " + id));
+                    INSERT.incrementAndGet();
                 }
             }
         }
@@ -230,18 +247,27 @@ public class NoLiveLocks {
             try (PreparedStatement statement = connection.prepareStatement(SUM_WHOLE_TABLE);
                  ResultSet rs = statement.executeQuery()) {
 
-                if (rs.next()) {
-                    double sum = rs.getDouble("sum");
-                    System.out.println(SuccessfulCompletion("Sum whole table: " + sum));
+                if (!rs.next()) {
+                    throw new SQLException("Full table SUM returned no result!");
                 }
+
+                double sum = rs.getDouble("sum");
+                System.out.println(SuccessfulCompletion("Sum whole table: " + sum));
+                NoLiveLocks.SUM_WHOLE_TABLE_SQL.incrementAndGet();
             }
         }
 
         private void updateInRanges(Connection connection) throws SQLException {
             List<Integer> updatedIds = new ArrayList<>();
-            for (int i = 0; i < 3; i++) {
-                try (PreparedStatement statement =
-                             connection.prepareStatement(UPDATE_TUPLE)) {
+
+            int iterations = 0;
+            // cap the number of iterations to avoid infinite loops
+            while (updatedIds.size() < 3 && iterations < 10) {
+                Array sqlArray = connection.createArrayOf(
+                        "INTEGER",
+                        updatedIds.toArray(Integer[]::new)
+                );
+                try (PreparedStatement statement = connection.prepareStatement(UPDATE_TUPLE)) {
 
                     statement.setDouble(1, rand.nextDouble() * max_value);
 
@@ -252,14 +278,23 @@ public class NoLiveLocks {
                     statement.setDouble(3, start_range[q]);
                     statement.setDouble(4, stop_range[q]);
 
+
+                    statement.setArray(5, sqlArray);
+
                     try (ResultSet rs = statement.executeQuery()) {
                         if (rs.next()) {
                             updatedIds.add(rs.getInt("data_id"));
                         }
                     }
+                } finally {
+                    sqlArray.free();
                 }
+
+                iterations++;
             }
+
             System.out.println(SuccessfulCompletion("Update entries: " + updatedIds));
+            UPDATE_3_ENTRIES.incrementAndGet();
         }
 
         @Override
