@@ -1,6 +1,8 @@
 plugins {
     id 'java'
     id 'application'
+    id 'org.jetbrains.kotlin.jvm' version '2.4.20'
+    id "org.jetbrains.kotlin.plugin.lombok" version '2.4.20'
 }
 
 repositories {
@@ -12,9 +14,15 @@ java {
         languageVersion = JavaLanguageVersion.of(25)
     }
 }
+
 dependencies {
-    runtimeOnly 'org.postgresql:postgresql:42.7.14'
+    implementation 'org.apache.commons:commons-lang3:3.20.0'
+
+    compileOnly 'org.projectlombok:lombok:1.18.42'
+    annotationProcessor 'org.projectlombok:lombok:1.18.42'
+
     implementation 'org.postgresql:postgresql:42.7.14'
+    testImplementation 'org.jetbrains.kotlin:kotlin-test'
 }
 
 application {

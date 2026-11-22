@@ -1,196 +1,285 @@
+import enums.OperationType;
+import org.apache.commons.lang3.tuple.Pair;
+
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Random;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.stream.IntStream;
 
 /**
- * 
+ *
  * @author Martin Schaeler martin.schaeler@plus.ac.at
- * 
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-# THE SOFTWARE.
-*/
+ * <p>
+ * # Permission is hereby granted, free of charge, to any person obtaining a copy
+ * # of this software and associated documentation files (the "Software"), to deal
+ * # in the Software without restriction, including without limitation the rights
+ * # to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * # copies of the Software, and to permit persons to whom the Software is
+ * # furnished to do so, subject to the following conditions:
+ * #
+ * # The above copyright notice and this permission notice shall be included in
+ * # all copies or substantial portions of the Software.
+ * #
+ * # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * # AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * # THE SOFTWARE.
+ */
 
 public class NoLiveLocks {
-	private final ReentrantLock lock = new ReentrantLock(true);
-	public static int num_taks=30;
-	public static int num_queries_per_task = 3;
+    private final ReentrantLock lock = new ReentrantLock(true);
+    public static int num_taks = 30;
+    public static int num_queries_per_task = 3;
 
-	Connection con;
-	Random rand = new Random(123456);
-	int num_tuple = 50000;
-	double max_value = 50.0f;
-	AtomicInteger tasks_finished;
+    Connection con;
+    Random rand = new Random(123456);
+    int num_tuple = 50000;
+    double max_value = 50.0f;
+    AtomicInteger tasks_finished;
 
-	public NoLiveLocks(){
-		tasks_finished = new AtomicInteger(0);
-	}
-	
-	void executeSQL(String sql, Connection con){
-		java.sql.Statement stmt;
-		try {
-			stmt = con.createStatement();
-			stmt.execute(sql);
-			System.out.println("Executing "+sql);
-			stmt.close();
-		} catch (SQLException e) {
-			e.printStackTrace();
-		}
-	}
-	
-	void cerateDB(){
-		try {
-			Connection con = ConnectionFactory.getDefaultParameterConnection(ConnectionFactory.POSTGRESQL);
-			executeSQL("DROP TABLE IF EXISTS blocking_data;",con);
-			executeSQL("CREATE TABLE blocking_data ( data_id integer primary key, data_value float, modified_by integer);",con);
-			
-			PreparedStatement ps;
-			con.setAutoCommit(false);
-			ps = con.prepareStatement("INSERT INTO blocking_data VALUES (?, ?, ?)",ResultSet.TYPE_SCROLL_SENSITIVE, ResultSet.CONCUR_UPDATABLE);
-			
-			for(int i=0;i<num_tuple;i++){
-				ps.setInt(1, i);
-				ps.setDouble(2,rand.nextDouble()*max_value);
-				ps.setInt(3, 0);
-				ps.addBatch();
-				ps.clearParameters();
-			}
-			
-			int[] results = ps.executeBatch();
-			con.commit();
-			con.close();
-			System.out.println(Arrays.toString(results));
-		} catch (SQLException e) {
-			e.printStackTrace();
-		}
-	}
-	
-	public static void main(String[] args){
-		//Create DB
-		NoLiveLocks b = new NoLiveLocks();
-		b.cerateDB();
-		
-		//Create task and their queries
-		ArrayList<NoLiveLocks.Blocker> my_tasks = new ArrayList<NoLiveLocks.Blocker>(num_taks);
-		for(int task=0;task<num_taks;task++){
-			my_tasks.add(b.new Blocker(task));
-		}
-		
-		//Execute tasks
-		ThreadPoolExecutor executor = 
-				  (ThreadPoolExecutor) Executors.newFixedThreadPool(4);//XXX - Do not change the number of threads used
-		double start, stop;
-		start = System.currentTimeMillis();
-		for(Blocker task : my_tasks) {
-			executor.execute(task);
-		}
-		executor.shutdown();
-		
-		//wait for the tasks to finish
-		while(!executor.isTerminated()) {
-			try {
-				Thread.sleep(100);
-			} catch (InterruptedException e) {
-				e.printStackTrace();
-			}
-		}
-		stop = System.currentTimeMillis();
-		System.out.println("[DONE] Task execution after roughly "+(stop-start)+" ms finished: "+b.tasks_finished+" of "+num_taks);
-	}
-	
-	/**
-	 * This is simply a task attempting to hold many write locks for a long time and updating major parts of the database.
-	 *
-	 */
-	public class Blocker implements Runnable  {
-		final int task;
-		final double [] start_range;
-		final double [] stop_range;
-		
-		public Blocker(int id){
-			this.task = id;
-			this.start_range = new double[num_queries_per_task];
-			this.stop_range  = new double[num_queries_per_task];
-			for(int q=0;q<num_queries_per_task;q++) {
-				stop_range[q]  = rand.nextDouble()*max_value;
-				start_range[q] = rand.nextDouble()*stop_range[q];
-			}
-		}
+    public NoLiveLocks() {
+        tasks_finished = new AtomicInteger(0);
+    }
 
-		@Override
-		public void run() {
-			lock.lock();
+    void executeSQL(String sql, Connection con) {
+        java.sql.Statement stmt;
+        try {
+            stmt = con.createStatement();
+            stmt.execute(sql);
+            System.out.println("Executing " + sql);
+            stmt.close();
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
 
-			try {
-				try (Connection connection =
-							 ConnectionFactory.getDefaultParameterConnection(
-									 ConnectionFactory.POSTGRESQL)) {
+    void cerateDB() {
+        try {
+            Connection con = ConnectionFactory.getDefaultParameterConnection(ConnectionFactory.POSTGRESQL);
+            executeSQL("DROP TABLE IF EXISTS blocking_data;", con);
+            executeSQL("CREATE TABLE blocking_data ( data_id integer primary key, data_value float, modified_by integer);", con);
 
-					connection.setAutoCommit(false);
-					connection.setTransactionIsolation(
-							Connection.TRANSACTION_READ_COMMITTED);
+            PreparedStatement ps;
+            con.setAutoCommit(false);
+            ps = con.prepareStatement("INSERT INTO blocking_data VALUES (?, ?, ?)", ResultSet.TYPE_SCROLL_SENSITIVE, ResultSet.CONCUR_UPDATABLE);
 
-					try {
-						String query =
-								"UPDATE blocking_data "
-										+ "SET data_value = ?, modified_by = ? "
-										+ "WHERE data_value >= ? AND data_value <= ?";
+            for (int i = 0; i < num_tuple; i++) {
+                ps.setInt(1, i);
+                ps.setDouble(2, rand.nextDouble() * max_value);
+                ps.setInt(3, 0);
+                ps.addBatch();
+                ps.clearParameters();
+            }
 
-						try (PreparedStatement statement =
-									 connection.prepareStatement(query)) {
+            int[] results = ps.executeBatch();
+            con.commit();
+            con.close();
+            System.out.println(Arrays.toString(results));
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
 
-							for (int q = 0; q < num_queries_per_task; q++) {
-								statement.setDouble(
-										1, (float) (rand.nextDouble() * max_value));
-								statement.setInt(2, task);
-								statement.setDouble(3, start_range[q]);
-								statement.setDouble(4, stop_range[q]);
-								statement.executeUpdate();
-							}
-						}
+    public static void main(String[] args) {
+        //Create DB
+        NoLiveLocks b = new NoLiveLocks();
+        b.cerateDB();
 
-						connection.commit();
+        //Create task and their queries
+        ArrayList<NoLiveLocks.Blocker> my_tasks = new ArrayList<NoLiveLocks.Blocker>(num_taks);
+        for (int task = 0; task < num_taks; task++) {
+            my_tasks.add(b.new Blocker(task));
+        }
 
-						int doneCount = tasks_finished.incrementAndGet();
+        //Execute tasks
+        ThreadPoolExecutor executor =
+                (ThreadPoolExecutor) Executors.newFixedThreadPool(4);//XXX - Do not change the number of threads used
+        double start, stop;
+        start = System.currentTimeMillis();
+        for (Blocker task : my_tasks) {
+            executor.execute(task);
+        }
+        executor.shutdown();
 
-						System.out.println(
-								"Done task " + task
-										+ ". I am finisher number " + doneCount);
+        //wait for the tasks to finish
+        while (!executor.isTerminated()) {
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+        stop = System.currentTimeMillis();
+        System.out.println("[DONE] Task execution after roughly " + (stop - start) + " ms finished: " + b.tasks_finished + " of " + num_taks);
+    }
 
-					} catch (SQLException error) {
-						connection.rollback();
-						throw error;
-					}
+    /**
+     * This is simply a task attempting to hold many write locks for a long time and updating major parts of the database.
+     *
+     */
+    public class Blocker implements Runnable {
+        final int task;
+        final double[] start_range;
+        final double[] stop_range;
+        final double p;
 
-				} catch (SQLException error) {
-					throw new RuntimeException(
-							"Task " + task + " failed", error);
-				}
-			} finally {
-				lock.unlock();
-			}
-		}
-	}
+        private static final String READ_ONLY_QUERY = "SELECT data_value FROM blocking_data WHERE data_id = ?";
+        private static final String INSERT_QUERY = "INSERT INTO blocking_data (data_id, data_value, modified_by) VALUES (?, ?, ?) RETURNING data_id";
+        private static final String SUM_WHOLE_TABLE = "SELECT SUM(data_value) AS sum FROM blocking_data";
+        private static final String UPDATE_TUPLE = "UPDATE blocking_data " +
+                "SET data_value = ?, modified_by = ? " +
+                "WHERE data_id = (" +
+                "    SELECT data_id FROM blocking_data " +
+                "    WHERE data_value >= ? AND data_value <= ? " +
+                "    LIMIT 1" +
+                ") RETURNING data_id";
+
+        public Blocker(int id) {
+            this.task = id;
+
+            // Using ThreadLocalRandom as "The random number obtained
+            // by one thread is not affected by the other thread
+            // whereas java.util.Random provides random numbers globally"
+            // From: https://www.baeldung.com/java-thread-local-random
+            this.p = ThreadLocalRandom.current().nextDouble(0, 1);
+
+            this.start_range = new double[num_queries_per_task];
+            this.stop_range = new double[num_queries_per_task];
+            for (int q = 0; q < num_queries_per_task; q++) {
+                stop_range[q] = rand.nextDouble() * max_value;
+                start_range[q] = rand.nextDouble() * stop_range[q];
+            }
+        }
+
+        private StringBuilder SuccessfulCompletion(final String operation) {
+            int doneCount = tasks_finished.incrementAndGet();
+            return new StringBuilder("Done task " + this.task + ". I am finisher " + doneCount + "\n" + operation + "\n");
+        }
+
+        private void readMultipleTuples(final Connection connection) throws SQLException {
+            final var results = IntStream.range(0, 3)
+                    .mapToObj(_ -> ThreadLocalRandom.current().nextInt(0, num_tuple))
+                    .map(idToRead -> {
+                        try (PreparedStatement statement = connection.prepareStatement(READ_ONLY_QUERY)) {
+                            statement.setInt(1, idToRead);
+                            try (ResultSet rs = statement.executeQuery()) {
+                                if (!rs.next()) {
+                                    throw new SQLException("ERROR: No result found for id: " + idToRead);
+                                }
+                                return Pair.of(idToRead, rs.getDouble("data_value"));
+                            }
+                        } catch (SQLException error) {
+                            throw new RuntimeException("Task " + this.task + " failed", error);
+                        }
+                    })
+                    .toList();
+            final var sum = results.stream()
+                    .mapToDouble(Pair::getValue)
+                    .sum();
+
+            final var output = SuccessfulCompletion("Sum 3 Tuples:");
+            results.forEach(result ->
+                    output.append(" id: ").append(result.getRight())
+                            .append(", value: ").append(result.getLeft()).append("\n")
+            );
+            output.append("Sum: ").append(sum).append("\n");
+
+            System.out.println(output);
+        }
+
+        private void insertEntry(Connection connection) throws SQLException {
+            try (PreparedStatement statement = connection.prepareStatement(INSERT_QUERY)) {
+                statement.setInt(1, num_tuple + this.task);
+                statement.setDouble(2, ThreadLocalRandom.current().nextDouble(0, 100));
+                statement.setInt(3, ThreadLocalRandom.current().nextInt(1, 100));
+
+                try (ResultSet rs = statement.executeQuery()) {
+                    if (!rs.next()) {
+                        throw new SQLException("Insert returned no data!");
+                    }
+                    final var id = rs.getInt("data_id");
+
+                    System.out.println(SuccessfulCompletion("Inserted tuple: ID = " + id));
+                }
+            }
+        }
+
+
+        private void readWholeTable(Connection connection) throws SQLException {
+            try (PreparedStatement statement = connection.prepareStatement(SUM_WHOLE_TABLE);
+                 ResultSet rs = statement.executeQuery()) {
+
+                if (rs.next()) {
+                    double sum = rs.getDouble("sum");
+                    System.out.println(SuccessfulCompletion("Sum whole table: " + sum));
+                }
+            }
+        }
+
+        private void updateInRanges(Connection connection) throws SQLException {
+            List<Integer> updatedIds = new ArrayList<>();
+            for (int i = 0; i < 3; i++) {
+                try (PreparedStatement statement =
+                             connection.prepareStatement(UPDATE_TUPLE)) {
+
+                    statement.setDouble(1, rand.nextDouble() * max_value);
+
+                    int q = ThreadLocalRandom.current()
+                            .nextInt(num_queries_per_task);
+
+                    statement.setInt(2, task);
+                    statement.setDouble(3, start_range[q]);
+                    statement.setDouble(4, stop_range[q]);
+
+                    try (ResultSet rs = statement.executeQuery()) {
+                        if (rs.next()) {
+                            updatedIds.add(rs.getInt("data_id"));
+                        }
+                    }
+                }
+            }
+            System.out.println(SuccessfulCompletion("Update entries: " + updatedIds));
+        }
+
+        @Override
+        public void run() {
+            lock.lock();
+            try (Connection connection =
+                         ConnectionFactory.getDefaultParameterConnection(ConnectionFactory.POSTGRESQL)) {
+                connection.setAutoCommit(false);
+                connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
+
+                try {
+                    switch (OperationType.fromProbability(this.p)) {
+                        case READ_MULTIPLE_TUPLES -> readMultipleTuples(connection);
+                        case INSERT_ENTRY -> insertEntry(connection);
+                        case READ_WHOLE_TABLE -> readWholeTable(connection);
+                        case UPDATE_IN_RANGES -> updateInRanges(connection);
+                        default -> throw new RuntimeException("Invalid range case detected!: " + p);
+                    }
+                    connection.commit();
+                } catch (Exception error) {
+                    connection.rollback();
+                    throw error;
+                }
+            } catch (Exception error) {
+                throw new RuntimeException("Task " + task + " failed", error);
+            } finally {
+                lock.unlock();
+            }
+        }
+    }
 }
