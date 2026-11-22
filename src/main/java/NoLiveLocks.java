@@ -12,6 +12,7 @@ import java.util.Random;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.IntStream;
@@ -93,37 +94,44 @@ public class NoLiveLocks {
         }
     }
 
-    public static void main(String[] args) {
+    static void main() throws InterruptedException {
         //Create DB
         NoLiveLocks b = new NoLiveLocks();
         b.cerateDB();
 
-        //Create task and their queries
-        ArrayList<NoLiveLocks.Blocker> my_tasks = new ArrayList<NoLiveLocks.Blocker>(num_taks);
-        for (int task = 0; task < num_taks; task++) {
-            my_tasks.add(b.new Blocker(task));
-        }
+        // Thread safe methods of storing running state and the current task. Essentially an ID.
+        AtomicBoolean isRunning = new AtomicBoolean(true);
+        AtomicInteger currentTaskNumber = new AtomicInteger(0);
 
         //Execute tasks
         ThreadPoolExecutor executor =
                 (ThreadPoolExecutor) Executors.newFixedThreadPool(4);//XXX - Do not change the number of threads used
-        double start, stop;
-        start = System.currentTimeMillis();
-        for (Blocker task : my_tasks) {
-            executor.execute(task);
+
+        final var start = System.currentTimeMillis();
+
+        // create 4 workers and each continues to create new transactions until isRunning is false (about 45 seconds).
+        for (int i = 0; i < 4; i++) {
+            executor.execute(() -> {
+                while (isRunning.get()) {
+                    int task = currentTaskNumber.getAndIncrement();
+                    b.new Blocker(task).run();
+                }
+            });
         }
+
+        // Run benchmark for 45 seconds
+        Thread.sleep(45_000);
+
+        isRunning.set(false);
         executor.shutdown();
 
-        //wait for the tasks to finish
+        // we wait for the current transactions to complete
         while (!executor.isTerminated()) {
-            try {
-                Thread.sleep(100);
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
+            Thread.sleep(100);
         }
-        stop = System.currentTimeMillis();
-        System.out.println("[DONE] Task execution after roughly " + (stop - start) + " ms finished: " + b.tasks_finished + " of " + num_taks);
+
+        double stop = System.currentTimeMillis();
+        System.out.println("[DONE] Finished " + b.tasks_finished + " transactions in " + (stop - start) + " ms");
     }
 
     /**
